@@ -1,0 +1,48 @@
+# Local testing: 3 tiers + do alag networks (frontend/backend)
+# web sirf app tak pahunch sakta hai, db tak nahi (Azure ke NSG design ki tarah)
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [backend]
+
+  app:
+    build: ./app
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_SSLMODE: disable
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [frontend, backend]
+
+  web:
+    build: ./web
+    environment:
+      APP_UPSTREAM: app:5000
+    ports:
+      - "8080:80"
+    depends_on:
+      - app
+    networks: [frontend]
+
+networks:
+  frontend:
+  backend:
+
+volumes:
+  pgdata:

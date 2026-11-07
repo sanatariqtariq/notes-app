@@ -1,0 +1,17 @@
+#cloud-config
+package_update: true
+packages:
+  - docker.io
+write_files:
+  - path: /opt/notes/deploy.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -e
+      IMAGE=ghcr.io/__GH_USER__/notes-web:latest
+      docker pull "$IMAGE"
+      docker rm -f notes 2>/dev/null || true
+      docker run -d --name notes --restart always -e APP_UPSTREAM=__APP_UPSTREAM__ -p 80:80 "$IMAGE"
+runcmd:
+  - systemctl enable --now docker
+  - [ bash, -c, "for i in 1 2 3 4 5; do /opt/notes/deploy.sh && break; sleep 20; done" ]
