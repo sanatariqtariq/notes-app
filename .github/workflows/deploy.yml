@@ -13,7 +13,32 @@ env:
   RG: rg-notes-cea
 
 jobs:
+  # 1) TEST: poora 3-tier stack docker compose se chala kar smoke tests
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create .env for test (dummy credentials)
+        run: cp .env.example .env
+
+      - name: Start stack
+        run: docker compose up -d --build
+
+      - name: Run smoke tests
+        run: bash scripts/smoke_test.sh http://localhost:8080
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Stop stack
+        if: always()
+        run: docker compose down -v
+
+  # 2) BUILD + PUSH: sirf test pass hone par
   build-and-push:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -49,6 +74,7 @@ jobs:
             ghcr.io/${{ env.OWNER }}/notes-web:${{ github.sha }}
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
 
+  # 3) DEPLOY: Azure VMSS par naya image
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
@@ -60,6 +86,14 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # Har VMSS instance par naya image pull + container restart
       - name: Redeploy to VM Scale Sets
         run: bash infra/redeploy.sh
+
+      - name: Verify live application
+        run: |
+          IP=$(az network public-ip show -g "$RG" -n pip-lb-web --query ipAddress -o tsv)
+          for i in $(seq 1 20); do
+            if curl -fsS "http://$IP/api/health"; then echo; echo "Live app healthy"; exit 0; fi
+            echo "waiting ($i/20)..."; sleep 10
+          done
+          echo "Live app not healthy"; exit 1

@@ -3,7 +3,8 @@
 # Usage:
 #   export GH_USER=<github-username-lowercase>
 #   export DB_PASSWORD=<strong alphanumeric password, 12+ chars>
-#   export LOC=<allowed region>        (optional, default centralindia)
+#   export LOC=<allowed region>        (optional, default eastasia)
+#   export VM_SKU=<size>               (optional, default Standard_B2ats_v2)
 #   export ALERT_EMAIL=<your email>    (optional, monitoring alert)
 #   bash infra/azure-setup.sh
 set -euo pipefail
@@ -13,13 +14,13 @@ cd "$(dirname "$0")/.."
 : "${DB_PASSWORD:?export DB_PASSWORD=<strong alphanumeric password>}"
 
 RG="${RG:-rg-notes-cea}"
-LOC="${LOC:-centralindia}"
+LOC="${LOC:-eastasia}"
 VNET=vnet-notes
 PG_NAME="${PG_NAME:-notes-pg-$RANDOM$RANDOM}"
 DB_ADMIN=notesadmin
 DB_NAME=notesdb
 APP_ILB_IP=10.0.2.10
-VM_SKU="${VM_SKU:-Standard_B1s}"
+VM_SKU="${VM_SKU:-Standard_B2ats_v2}"
 
 echo "== 0. Resource providers register"
 for p in Microsoft.Network Microsoft.Compute Microsoft.DBforPostgreSQL Microsoft.Insights; do
@@ -60,12 +61,23 @@ az network vnet subnet create -g "$RG" --vnet-name "$VNET" -n snet-db \
   --delegations Microsoft.DBforPostgreSQL/flexibleServers -o none
 
 echo "== 5. PostgreSQL Flexible Server (private access, 5-10 min lagte hain)"
+# Private DNS zone khud banate hain (naye CLI mein zaroori); dobara chalane par error ignore
+PG_DNS_ZONE=notes-cea.private.postgres.database.azure.com
+az network private-dns zone create -g "$RG" -n "$PG_DNS_ZONE" -o none || true
+az network private-dns link vnet create -g "$RG" -z "$PG_DNS_ZONE" -n link-vnet-notes \
+  -v "$VNET" -e false -o none || true
+PG_DNS_ID=$(az network private-dns zone show -g "$RG" -n "$PG_DNS_ZONE" --query id -o tsv)
+
+# Server pehle se maujood ho to dobara nahi banta
+az postgres flexible-server show -g "$RG" -n "$PG_NAME" -o none 2>/dev/null || \
 az postgres flexible-server create -g "$RG" -n "$PG_NAME" -l "$LOC" \
   --admin-user "$DB_ADMIN" --admin-password "$DB_PASSWORD" \
-  --sku-name Standard_B1ms --tier Burstable --storage-size 32 --version 16 \
-  --vnet "$VNET" --subnet snet-db --database-name "$DB_NAME" --yes -o none
+  --sku-name "${PG_SKU:-Standard_B1ms}" ${PG_ZONE:+--zone $PG_ZONE} \
+  --tier Burstable --storage-size 32 --version 16 \
+  --vnet "$VNET" --subnet snet-db --private-dns-zone "$PG_DNS_ID" --yes -o none
 DB_HOST=$(az postgres flexible-server show -g "$RG" -n "$PG_NAME" --query fullyQualifiedDomainName -o tsv)
 echo "DB host: $DB_HOST"
+az postgres flexible-server db create -g "$RG" --server-name "$PG_NAME" --name "$DB_NAME" -o none || true
 
 echo "== 6. Load balancers"
 # Public LB (web tier)
